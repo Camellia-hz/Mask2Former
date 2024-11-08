@@ -17,6 +17,118 @@ from .modeling.criterion import SetCriterion
 from .modeling.matcher import HungarianMatcher
 
 
+from PIL import Image
+import math
+
+class MultiScaleFeatureExtractor(nn.Module):
+    def __init__(self):
+        super(MultiScaleFeatureExtractor, self).__init__()
+
+        self.to_res4 = nn.Conv2d(1024, 768, kernel_size=1, stride=1, padding=0)
+        self.downsample_res5 = nn.Sequential(
+            nn.Conv2d(1024, 1536, kernel_size=2, stride=2, padding=0),
+            nn.BatchNorm2d(1536),
+            nn.GELU()
+        )
+        self.upsample_res3 = nn.Sequential(
+            nn.ConvTranspose2d(768, 384, kernel_size=2, stride=2),
+            nn.BatchNorm2d(384),
+            nn.GELU()
+        )
+        self.upsample_res2 = nn.Sequential(
+            nn.ConvTranspose2d(384, 192, kernel_size=2, stride=2),
+            nn.BatchNorm2d(192),
+            nn.GELU()
+        )
+
+    def forward(self, x):
+        """
+            x: b, n, c
+        """
+        from einops import rearrange
+        _, n, _ = x.shape
+        h = w = int(math.sqrt(n))
+        x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
+        res4 = self.to_res4(x)
+        res5 = self.downsample_res5(res4)
+        res3 = self.upsample_res3(res4)
+        res2 = self.upsample_res2(res3)
+
+        return {
+            "res2": res2,  # b, 192, 96, 96
+            "res3": res3,  # b, 384, 48, 48
+            "res4": res4,  # b, 768, 24, 24
+            "res5": res5   # b, 1536, 12, 12
+        }
+        
+def get_norm(norm, num_features):
+    return nn.BatchNorm2d(num_features)
+class FeaturePyramid(nn.Module):
+    def __init__(self, in_channels=1024, out_channels_list=[192, 384, 768, 1536]):
+        super(FeaturePyramid, self).__init__()
+        self.stages = nn.ModuleList()
+
+        # Scale factors to match the output dimensions for res2, res3, res4, and res5
+        scale_factors = [4.0, 2.0, 1.0, 0.5]
+        strides = [4, 2, 1, 0.5]  # strides matching each output resolution
+
+        for idx, scale in enumerate(scale_factors):
+            out_dim = in_channels  # Start from input channels (1024)
+            out_channels = out_channels_list[idx]
+
+            if scale == 4.0:  # Upsample for res2
+                layers = [
+                    nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2),
+                    get_norm("batch", in_channels // 2),
+                    nn.GELU(),
+                    nn.ConvTranspose2d(in_channels // 2, in_channels // 4, kernel_size=2, stride=2),
+                ]
+                out_dim = in_channels // 4
+            elif scale == 2.0:  # Upsample for res3
+                layers = [nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)]
+                out_dim = in_channels // 2
+            elif scale == 1.0:  # Identity for res4
+                layers = []  # Identity layer (no transformation for res4)
+            elif scale == 0.5:  # Downsample for res5
+                layers = [nn.MaxPool2d(kernel_size=2, stride=2)]
+            else:
+                raise NotImplementedError(f"scale_factor={scale} is not supported yet.")
+
+            # Add 1x1 conv + norm + 3x3 conv with the required output channels
+            layers.extend(
+                [
+                    nn.Conv2d(out_dim, out_channels, kernel_size=1, bias=False),
+                    get_norm("batch", out_channels),
+                    nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                    get_norm("batch", out_channels),
+                ]
+            )
+            self.stages.append(nn.Sequential(*layers))
+
+    def forward(self, x):
+        from einops import rearrange
+        _, n, _ = x.shape
+        h = w = int(math.sqrt(n))
+        x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
+        res2 = self.stages[0](x)  # b, 192, 96, 96
+        res3 = self.stages[1](x)  # b, 384, 48, 48
+        res4 = self.stages[2](x)  # b, 768, 24, 24
+        res5 = self.stages[3](x)  # b, 1536, 12, 12
+
+        return {"res2": res2, "res3": res3, "res4": res4, "res5": res5}
+
+MODEL_PATH = "/mnt/csi-data-aly/shared/public/haozhou/checkpoints/clip-vit-large-patch14-336"
+
+from transformers import CLIPVisionModel, CLIPImageProcessor
+def build_clip_backbone(model_path=MODEL_PATH):
+    clip_processor = CLIPImageProcessor.from_pretrained(model_path)
+    clip_model = CLIPVisionModel.from_pretrained(model_path)
+    clip_model.eval()
+    for param in clip_model.parameters():
+        param.requires_grad = False
+    
+    return clip_processor, clip_model
+
 @META_ARCH_REGISTRY.register()
 class MaskFormer(nn.Module):
     """
@@ -69,7 +181,8 @@ class MaskFormer(nn.Module):
             test_topk_per_image: int, instance segmentation parameter, keep topk instances per image
         """
         super().__init__()
-        self.backbone = backbone
+        self.processor, self.backbone = build_clip_backbone()
+        self.neck = FeaturePyramid()
         self.sem_seg_head = sem_seg_head
         self.criterion = criterion
         self.num_queries = num_queries
@@ -190,18 +303,31 @@ class MaskFormer(nn.Module):
                     segments_info (list[dict]): Describe each segment in `panoptic_seg`.
                         Each dict contains keys "id", "category_id", "isthing".
         """
-        images = [x["image"].to(self.device) for x in batched_inputs]
-        images = [(x - self.pixel_mean) / self.pixel_std for x in images]
-        images = ImageList.from_tensors(images, self.size_divisibility)
-
-        features = self.backbone(images.tensor)
+        images = [x["image"].to(self.device) for x in batched_inputs]  # tensor array
+        ori_images = [(x - self.pixel_mean) / self.pixel_std for x in images]
+        ori_images = ImageList.from_tensors(ori_images, self.size_divisibility)
+        
+        image_list = []
+        for image in images:
+            numpy_image = image.permute(1, 2, 0).cpu().numpy()
+            image = Image.fromarray(numpy_image)
+            image_list.append(image)
+        
+        image_list = [self.processor.preprocess(img, return_tensors='pt')['pixel_values'][0] for img in image_list]
+        images_tensor = torch.stack(image_list, dim=0).to(self.device)
+        with torch.no_grad():
+            self.backbone.eval()
+            image_forward_outs = self.backbone(images_tensor, output_hidden_states=True)
+            image_features = image_forward_outs.hidden_states[-2]
+            image_features = image_features[:, 1:]
+        features = self.neck(image_features)
         outputs = self.sem_seg_head(features)
 
         if self.training:
             # mask classification target
             if "instances" in batched_inputs[0]:
                 gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
-                targets = self.prepare_targets(gt_instances, images)
+                targets = self.prepare_targets(gt_instances, images_tensor)
             else:
                 targets = None
 
@@ -221,7 +347,7 @@ class MaskFormer(nn.Module):
             # upsample masks
             mask_pred_results = F.interpolate(
                 mask_pred_results,
-                size=(images.tensor.shape[-2], images.tensor.shape[-1]),
+                size=(images_tensor.shape[-2], images_tensor.shape[-1]),
                 mode="bilinear",
                 align_corners=False,
             )
@@ -230,7 +356,7 @@ class MaskFormer(nn.Module):
 
             processed_results = []
             for mask_cls_result, mask_pred_result, input_per_image, image_size in zip(
-                mask_cls_results, mask_pred_results, batched_inputs, images.image_sizes
+                mask_cls_results, mask_pred_results, batched_inputs, ori_images.image_sizes
             ):
                 height = input_per_image.get("height", image_size[0])
                 width = input_per_image.get("width", image_size[1])
@@ -262,7 +388,7 @@ class MaskFormer(nn.Module):
             return processed_results
 
     def prepare_targets(self, targets, images):
-        h_pad, w_pad = images.tensor.shape[-2:]
+        h_pad, w_pad = images.shape[-2:]
         new_targets = []
         for targets_per_image in targets:
             # pad gt
@@ -378,3 +504,4 @@ class MaskFormer(nn.Module):
         result.scores = scores_per_image * mask_scores_per_image
         result.pred_classes = labels_per_image
         return result
+

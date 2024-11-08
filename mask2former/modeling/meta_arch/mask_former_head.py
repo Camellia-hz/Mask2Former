@@ -92,7 +92,7 @@ class MaskFormerHead(nn.Module):
         elif cfg.MODEL.MASK_FORMER.TRANSFORMER_IN_FEATURE == "pixel_embedding":
             transformer_predictor_in_channels = cfg.MODEL.SEM_SEG_HEAD.MASK_DIM
         elif cfg.MODEL.MASK_FORMER.TRANSFORMER_IN_FEATURE == "multi_scale_pixel_decoder":  # for maskformer2
-            transformer_predictor_in_channels = cfg.MODEL.SEM_SEG_HEAD.CONVS_DIM
+            transformer_predictor_in_channels = cfg.MODEL.SEM_SEG_HEAD.CONVS_DIM # zh
         else:
             transformer_predictor_in_channels = input_shape[cfg.MODEL.MASK_FORMER.TRANSFORMER_IN_FEATURE].channels
 
@@ -100,8 +100,8 @@ class MaskFormerHead(nn.Module):
             "input_shape": {
                 k: v for k, v in input_shape.items() if k in cfg.MODEL.SEM_SEG_HEAD.IN_FEATURES
             },
-            "ignore_value": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
-            "num_classes": cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES,
+            "ignore_value": cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE, # 255
+            "num_classes": cfg.MODEL.SEM_SEG_HEAD.NUM_CLASSES, # 19
             "pixel_decoder": build_pixel_decoder(cfg, input_shape),
             "loss_weight": cfg.MODEL.SEM_SEG_HEAD.LOSS_WEIGHT,
             "transformer_in_feature": cfg.MODEL.MASK_FORMER.TRANSFORMER_IN_FEATURE,

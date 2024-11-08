@@ -57,6 +57,7 @@ from mask2former import (
     SemanticSegmentorWithTTA,
     add_maskformer2_config,
 )
+import deekeeper
 
 
 class Trainer(DefaultTrainer):
@@ -297,7 +298,9 @@ def setup(args):
 
 def main(args):
     cfg = setup(args)
-
+    import torch.distributed as dist
+    # if dist.get_rank() == 0:
+    #     deekeeper.init_deekeeper_task("mask2former", args.exp_name, True)
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
@@ -317,6 +320,7 @@ def main(args):
 
 if __name__ == "__main__":
     args = default_argument_parser().parse_args()
+    setattr(args, 'exp_name', 'mask2former')
     print("Command Line Args:", args)
     launch(
         main,
