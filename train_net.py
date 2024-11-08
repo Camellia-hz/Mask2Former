@@ -299,8 +299,8 @@ def setup(args):
 def main(args):
     cfg = setup(args)
     import torch.distributed as dist
-    # if dist.get_rank() == 0:
-    #     deekeeper.init_deekeeper_task("mask2former", args.exp_name, True)
+    if dist.get_rank() == 0:
+        deekeeper.init_deekeeper_task("mask2former", args.exp_name, True)
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(

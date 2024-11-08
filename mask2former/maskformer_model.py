@@ -192,7 +192,8 @@ class MaskFormer(nn.Module):
         if size_divisibility < 0:
             # use backbone size_divisibility if not set
             size_divisibility = self.backbone.size_divisibility
-        self.size_divisibility = size_divisibility
+        # self.size_divisibility = size_divisibility
+        self.size_divisibility = 0
         self.sem_seg_postprocess_before_inference = sem_seg_postprocess_before_inference
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
@@ -303,21 +304,14 @@ class MaskFormer(nn.Module):
                     segments_info (list[dict]): Describe each segment in `panoptic_seg`.
                         Each dict contains keys "id", "category_id", "isthing".
         """
-        images = [x["image"].to(self.device) for x in batched_inputs]  # tensor array
-        ori_images = [(x - self.pixel_mean) / self.pixel_std for x in images]
-        ori_images = ImageList.from_tensors(ori_images, self.size_divisibility)
-        
-        image_list = []
-        for image in images:
-            numpy_image = image.permute(1, 2, 0).cpu().numpy()
-            image = Image.fromarray(numpy_image)
-            image_list.append(image)
-        
-        image_list = [self.processor.preprocess(img, return_tensors='pt')['pixel_values'][0] for img in image_list]
-        images_tensor = torch.stack(image_list, dim=0).to(self.device)
+        print(batched_inputs[0]['is_resize'])
+        images = [x["image"].to(self.device) for x in batched_inputs]
+        images = [(x - self.pixel_mean) / self.pixel_std for x in images]
+        images = ImageList.from_tensors(images, self.size_divisibility)
+        print(self.size_divisibility)
         with torch.no_grad():
             self.backbone.eval()
-            image_forward_outs = self.backbone(images_tensor, output_hidden_states=True)
+            image_forward_outs = self.backbone(images.tensor, output_hidden_states=True)
             image_features = image_forward_outs.hidden_states[-2]
             image_features = image_features[:, 1:]
         features = self.neck(image_features)
@@ -327,7 +321,7 @@ class MaskFormer(nn.Module):
             # mask classification target
             if "instances" in batched_inputs[0]:
                 gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
-                targets = self.prepare_targets(gt_instances, images_tensor)
+                targets = self.prepare_targets(gt_instances, images)
             else:
                 targets = None
 
@@ -347,7 +341,7 @@ class MaskFormer(nn.Module):
             # upsample masks
             mask_pred_results = F.interpolate(
                 mask_pred_results,
-                size=(images_tensor.shape[-2], images_tensor.shape[-1]),
+                size=(images.tensor.shape[-2], images.tensor.shape[-1]),
                 mode="bilinear",
                 align_corners=False,
             )
@@ -356,7 +350,7 @@ class MaskFormer(nn.Module):
 
             processed_results = []
             for mask_cls_result, mask_pred_result, input_per_image, image_size in zip(
-                mask_cls_results, mask_pred_results, batched_inputs, ori_images.image_sizes
+                mask_cls_results, mask_pred_results, batched_inputs, images.image_sizes
             ):
                 height = input_per_image.get("height", image_size[0])
                 width = input_per_image.get("width", image_size[1])
@@ -388,7 +382,7 @@ class MaskFormer(nn.Module):
             return processed_results
 
     def prepare_targets(self, targets, images):
-        h_pad, w_pad = images.shape[-2:]
+        h_pad, w_pad = images.tensor.shape[-2:]
         new_targets = []
         for targets_per_image in targets:
             # pad gt
