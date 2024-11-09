@@ -304,11 +304,10 @@ class MaskFormer(nn.Module):
                     segments_info (list[dict]): Describe each segment in `panoptic_seg`.
                         Each dict contains keys "id", "category_id", "isthing".
         """
-        print(batched_inputs[0]['is_resize'])
         images = [x["image"].to(self.device) for x in batched_inputs]
         images = [(x - self.pixel_mean) / self.pixel_std for x in images]
         images = ImageList.from_tensors(images, self.size_divisibility)
-        print(self.size_divisibility)
+
         with torch.no_grad():
             self.backbone.eval()
             image_forward_outs = self.backbone(images.tensor, output_hidden_states=True)
