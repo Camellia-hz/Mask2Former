@@ -4,6 +4,7 @@ from typing import Tuple
 import torch
 from torch import nn
 from torch.nn import functional as F
+import torchvision.transforms as T
 
 from detectron2.config import configurable
 from detectron2.data import MetadataCatalog
@@ -197,7 +198,8 @@ class MaskFormer(nn.Module):
         self.sem_seg_postprocess_before_inference = sem_seg_postprocess_before_inference
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
-
+        self.resize_transform = T.Resize((336, 336))
+        
         # additional args
         self.semantic_on = semantic_on
         self.instance_on = instance_on
@@ -304,7 +306,10 @@ class MaskFormer(nn.Module):
                     segments_info (list[dict]): Describe each segment in `panoptic_seg`.
                         Each dict contains keys "id", "category_id", "isthing".
         """
-        images = [x["image"].to(self.device) for x in batched_inputs]
+        if self.training:
+            images = [x["image"].to(self.device) for x in batched_inputs]
+        else:
+            images = [self.resize_transform(x["image"]).to(self.device) for x in batched_inputs]
         images = [(x - self.pixel_mean) / self.pixel_std for x in images]
         images = ImageList.from_tensors(images, self.size_divisibility)
 
