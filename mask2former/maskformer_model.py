@@ -84,7 +84,7 @@ class MaskFormer(nn.Module):
         self.sem_seg_postprocess_before_inference = sem_seg_postprocess_before_inference
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
-        self.resize_transform = T.Resize((336, 336))
+        self.resize_transform = T.Resize((384, 384))
         
         # additional args
         self.semantic_on = semantic_on

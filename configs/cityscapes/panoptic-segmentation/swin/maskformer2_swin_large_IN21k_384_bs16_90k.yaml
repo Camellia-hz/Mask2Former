@@ -18,9 +18,9 @@ MODEL:
     NUM_OBJECT_QUERIES: 100
 
 SOLVER:
-  IMS_PER_BATCH: 32 # batch * iter == 16 * 90000, but less iter
+  IMS_PER_BATCH: 128 # batch * iter == 16 * 90000, but less iter
   BASE_LR: 0.0001
-  MAX_ITER: 5000
+  MAX_ITER: 8000
   WARMUP_FACTOR: 1.0
   WARMUP_ITERS: 0
   WEIGHT_DECAY: 0.05
@@ -35,8 +35,24 @@ SOLVER:
   AMP:
     ENABLED: True
 
+INPUT:
+  MIN_SIZE_TRAIN: !!python/object/apply:eval ["[int(x * 0.1 * 1024) for x in range(5, 21)]"]
+  MIN_SIZE_TRAIN_SAMPLING: "choice"
+  MIN_SIZE_TEST: 1024
+  MAX_SIZE_TRAIN: 4096
+  MAX_SIZE_TEST: 2048
+  CROP:
+    ENABLED: True
+    TYPE: "absolute"
+    SIZE: (384, 384)
+    SINGLE_CATEGORY_MAX_AREA: 1.0
+  COLOR_AUG_SSD: True
+  SIZE_DIVISIBILITY: -1
+  FORMAT: "RGB"
+  DATASET_MAPPER_NAME: "mask_former_panoptic"
+
 TEST:
-  EVAL_PERIOD: 5000
+  EVAL_PERIOD: 8000
   AUG:
     ENABLED: False
     MIN_SIZES: [512, 768, 1024, 1280, 1536, 1792]

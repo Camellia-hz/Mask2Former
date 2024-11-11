@@ -3,6 +3,7 @@ import copy
 import logging
 
 import numpy as np
+from PIL import Image
 import torch
 from torch.nn import functional as F
 
@@ -55,7 +56,19 @@ class MaskFormerPanopticDatasetMapper(MaskFormerSemanticDatasetMapper):
             ignore_label=ignore_label,
             size_divisibility=size_divisibility,
         )
+    
+    def resize_array(self, array, target_size=(768, 768), is_rgb=True):
+        """
+        Resize an array to the target size.
+        """
+        if is_rgb:
+            image = Image.fromarray(array.astype('uint8'), 'RGB')
+        else:
+            image = Image.fromarray(array.astype('uint8'), 'L')
 
+        resized_image = image.resize(target_size, Image.BILINEAR)
+        return np.array(resized_image), True
+    
     def __call__(self, dataset_dict):
         """
         Args:
@@ -91,7 +104,11 @@ class MaskFormerPanopticDatasetMapper(MaskFormerSemanticDatasetMapper):
                     dataset_dict["file_name"]
                 )
             )
-
+        is_resize = False
+        image, is_resize = self.resize_array(image)
+        sem_seg_gt, is_resize = self.resize_array(sem_seg_gt, is_rgb=False)
+        pan_seg_gt, is_resize = self.resize_array(pan_seg_gt)
+        dataset_dict['is_resize'] = is_resize
         aug_input = T.AugInput(image, sem_seg=sem_seg_gt)
         aug_input, transforms = T.apply_transform_gens(self.tfm_gens, aug_input)
         image = aug_input.image
